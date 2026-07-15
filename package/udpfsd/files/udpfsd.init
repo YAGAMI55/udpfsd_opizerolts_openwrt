@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+# (c) 2026 OpenWrt.org
+
+USE_PROCD=1
+START=95
+STOP=01
+
+# Путь к папке с играми (убедитесь, что она смонтирована)
+GAMES_DIR="/mnt/usb/PS2GAMES"
+
+start_service() {
+    [ -x /usr/bin/udpfsd ] || {
+        echo "udpfsd binary not found"
+        return 1
+    }
+
+    [ -d "$GAMES_DIR" ] || {
+        echo "Games directory $GAMES_DIR does not exist"
+        return 1
+    }
+
+    procd_open_instance
+    procd_set_param command /usr/bin/udpfsd
+    procd_set_param args -fsroot "$GAMES_DIR" -ro -verbose
+    procd_set_param respawn
+    procd_close_instance
+}
