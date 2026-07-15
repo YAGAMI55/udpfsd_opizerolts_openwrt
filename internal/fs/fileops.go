@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -23,7 +24,6 @@ func (s *Backend) Open(path string, flag int, isDir bool) (handle int32, stat ud
 	open, fileReadOnly := s.getFileState(fullPath)
 	wantWrite := (flag & (os.O_WRONLY | os.O_RDWR)) != 0
 	openForWriting := open && !fileReadOnly
-
 	if wantWrite && (s.readOnly || open) {
 		log.Printf("fs: refusing to open %s for writing: file already opened or FS is read-only", fullPath)
 		return 0, udpfs.StatInfo{}, os.ErrPermission
@@ -36,7 +36,6 @@ func (s *Backend) Open(path string, flag int, isDir bool) (handle int32, stat ud
 	//
 	// Handle directory path
 	//
-
 	if isDir {
 		entries, err := os.ReadDir(fullPath)
 		if err != nil {
@@ -82,9 +81,7 @@ func (s *Backend) Open(path string, flag int, isDir bool) (handle int32, stat ud
 		}
 	}
 
-	//
 	// Handle plain file
-	//
 	if !exists && ((flag & os.O_CREATE) == 0) {
 		// If file doesn't exist and O_CREATE is not set, fail
 		return 0, udpfs.StatInfo{}, os.ErrNotExist
@@ -100,13 +97,11 @@ func (s *Backend) Open(path string, flag int, isDir bool) (handle int32, stat ud
 		log.Printf("fs: failed to open file %s with flag 0x%x: %v\n", fullPath, flag, err)
 		return 0, udpfs.StatInfo{}, err
 	}
-
 	handle = s.allocHandle(s.newFileHandle(f, (flag&(os.O_RDWR|os.O_WRONLY) == 0)))
 	if handle < 0 {
 		f.Close()
 		return handle, udpfs.StatInfo{}, nil
 	}
-
 	st, _ := f.Stat()
 	return handle, udpfs.StatInfoFromFile(st), nil
 }
@@ -118,6 +113,11 @@ func (s *Backend) Close(handle int32) error {
 	return nil
 }
 
+// Read reads data from the file associated with the given handle.
+// It guarantees that it will read exactly 'size' bytes unless an error occurs
+// or EOF is reached. If EOF is reached after reading some bytes, it returns
+// the partial read without an error (client will handle the short read).
+// If EOF is reached immediately (0 bytes read), it returns io.EOF.
 func (s *Backend) Read(handle int32, size uint32, readBuffer []byte) (int32, []byte, error) {
 	f := s.getFile(handle)
 	if f == nil {
@@ -126,12 +126,37 @@ func (s *Backend) Read(handle int32, size uint32, readBuffer []byte) (int32, []b
 	f.Lock()
 	defer f.Unlock()
 
-	read, err := f.Read(readBuffer[:size])
-	if err != nil && err != os.ErrClosed && err != io.EOF {
-		log.Printf("fs: failed to read file %s: %v", f.Name(), err)
-		return 0, nil, err
+	// Ensure the buffer is large enough
+	if len(readBuffer) < int(size) {
+		return 0, nil, fmt.Errorf("buffer too small: %d < %d", len(readBuffer), size)
 	}
-	return int32(read), readBuffer[:read], nil
+
+	totalRead := 0
+	for totalRead < int(size) {
+		n, err := f.Read(readBuffer[totalRead:size])
+		totalRead += n
+
+		if err != nil {
+			if err == io.EOF {
+				// If we've read something, return it (client will handle short read)
+				if totalRead > 0 {
+					break
+				}
+				// Otherwise, this is a real EOF condition
+				return 0, nil, io.EOF
+			}
+			// Any other error is fatal
+			log.Printf("fs: failed to read file %s: %v", f.Name(), err)
+			return 0, nil, err
+		}
+
+		// If n == 0 and no error, this is unexpected; break to avoid infinite loop
+		if n == 0 {
+			break
+		}
+	}
+
+	return int32(totalRead), readBuffer[:totalRead], nil
 }
 
 func (s *Backend) WriteStart(handle int32) error {
@@ -169,7 +194,8 @@ func (s *Backend) WriteChunk(handle int32, chunkNr, chunkSize, totalChunks uint1
 	return f.wr.receivedChunks >= f.wr.totalChunks, nil
 }
 
-// CompleteWrite completes the current write (regular or block). Returns bytes written for regular, 0 for block on success.
+// CompleteWrite completes the current write (regular or block). Returns bytes
+// written for regular, 0 for block on success.
 func (s *Backend) CompleteWrite(handle int32) (n int32, err error) {
 	f := s.getFile(handle)
 	if f == nil {
@@ -182,6 +208,7 @@ func (s *Backend) CompleteWrite(handle int32) (n int32, err error) {
 	if handle != udpfs.BlockDeviceHandle {
 		sectorSize = 512
 	}
+
 	data := append([]byte(nil), f.wr.dataBuffer...)
 
 	if f.wr.blockWrite {
@@ -200,6 +227,7 @@ func (s *Backend) CompleteWrite(handle int32) (n int32, err error) {
 		}
 		return 0, nil
 	}
+
 	if f.Write == nil {
 		return -9, nil
 	}
@@ -234,139 +262,44 @@ func (s *Backend) Dread(handle int32) (ok bool, name string, stat udpfs.StatInfo
 	}
 	entry := d.entries[d.index]
 	d.index++
-	dirPath := d.dirPath
 
+	dirPath := d.dirPath
 	info, err := entry.Info()
 	if err != nil {
 		return false, "", udpfs.StatInfo{}, nil
 	}
 	name = entry.Name()
 
-	var st udpfs.StatInfo
-	// If compression is enabled and file has one of supported compressed ISO extensions, append .iso
-	if s.enableCompression && slices.Contains(compression.GetSupportedExtensions(), filepath.Ext(name)) {
-		name = name + ".iso"
-		entryPath := filepath.Join(dirPath, entry.Name())
-		cst := compression.GetStat(entryPath)
-		if cst == nil {
-			return false, "", udpfs.StatInfo{}, nil
-		}
-		st = udpfs.StatInfoFromFile(cst)
+	var fullPath string
+	if dirPath != "" && dirPath != "/" {
+		fullPath = filepath.Join(dirPath, name)
 	} else {
-		st = udpfs.StatInfoFromFile(info)
+		fullPath = filepath.Join("/", name)
 	}
-	return true, name, st, nil
-}
 
-func (s *Backend) Getstat(path string) (stat udpfs.StatInfo, err error) {
-	if path == "" {
-		if s.bdHandle != nil {
-			totalBytes := int64(s.bdHandle.totalSectorCount) * int64(s.sectorSize)
-			st := udpfs.StatInfo{}
-			st.Size = uint32(totalBytes & 0xFFFFFFFF)
-			st.Hisize = uint32(totalBytes >> 32)
-			return st, nil
+	// Check if this is a directory
+	if entry.IsDir() {
+		// Return directory info
+		return true, name, udpfs.StatInfoFromFile(info), nil
+	}
+
+	// For files, check if we have a compressed version
+	if s.enableCompression {
+		// Check if this file is a compressed image
+		if strings.ToLower(filepath.Ext(name)) == ".iso" {
+			// Try to find compressed version
+			baseName := strings.TrimSuffix(name, filepath.Ext(name))
+			// Check for compressed file in the same directory
+			compressedPath := filepath.Join(filepath.Dir(fullPath), baseName)
+			if s.pathExists(compressedPath) {
+				// It's a compressed file, get its info
+				compInfo, err := os.Stat(compressedPath)
+				if err == nil {
+					return true, name, udpfs.StatInfoFromFile(compInfo), nil
+				}
+			}
 		}
 	}
 
-	resolved, ok := s.resolvePath(path)
-	if !ok {
-		return stat, os.ErrInvalid
-	}
-
-	f := s.getFileByPath(resolved)
-	if f == nil {
-		return stat, os.ErrInvalid
-	}
-	f.Lock()
-	defer f.Unlock()
-
-	st, err := f.Stat()
-	if err != nil {
-		return stat, err
-	}
-	return udpfs.StatInfoFromFile(st), nil
-}
-
-func (s *Backend) Mkdir(path string) error {
-	if s.readOnly {
-		return os.ErrPermission
-	}
-	resolved, ok := s.resolvePath(path)
-	if !ok {
-		return os.ErrPermission
-	}
-	if err := os.Mkdir(resolved, 0755); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	return nil
-}
-
-func (s *Backend) Remove(path string) error {
-	if s.readOnly {
-		return os.ErrPermission
-	}
-	resolved, ok := s.resolvePath(path)
-	if !ok {
-		return os.ErrPermission
-	}
-	return os.Remove(resolved)
-}
-
-func (s *Backend) Rmdir(path string) error {
-	if s.readOnly {
-		return os.ErrPermission
-	}
-	resolved, ok := s.resolvePath(path)
-	if !ok {
-		return os.ErrPermission
-	}
-	return os.Remove(resolved)
-}
-
-func (s *Backend) Bread(handle int32, sectorNr int64, sectorCount uint16, readBuffer []byte) ([]byte, error) {
-	f := s.getFile(handle)
-	if f == nil {
-		return nil, os.ErrInvalid
-	}
-	f.Lock()
-	defer f.Unlock()
-
-	sectorSize := s.sectorSize
-	if handle != udpfs.BlockDeviceHandle {
-		sectorSize = 512
-	}
-
-	_, err := f.Seek(sectorNr*int64(sectorSize), io.SeekStart)
-	if err != nil {
-		return nil, err
-	}
-
-	n, err := f.Read(readBuffer[:int(sectorCount)*sectorSize])
-	if err != nil && err != io.EOF {
-		log.Printf("fs: failed to read %s: %v", f.Name(), err)
-		return nil, err
-	}
-	readBuffer = readBuffer[:n]
-	return readBuffer, nil
-}
-
-func (s *Backend) BwriteStart(handle int32, sectorNr int64, sectorCount uint16) error {
-	f := s.getFile(handle)
-	if f == nil {
-		return os.ErrInvalid
-	}
-	f.Lock()
-	defer f.Unlock()
-
-	if f.readOnly {
-		return os.ErrPermission
-	}
-	f.wr.blockWrite = true
-	f.wr.sectorNumber = sectorNr
-	f.wr.sectorCount = sectorCount
-	f.wr.dataBuffer = []byte{}
-	f.wr.totalChunks = 0
-	f.wr.receivedChunks = 0
-	return nil
+	return true, name, udpfs.StatInfoFromFile(info), nil
 }
