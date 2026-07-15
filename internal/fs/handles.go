@@ -22,19 +22,18 @@ type blockDeviceHandle struct {
 }
 
 type fileHandle struct {
-	obj     interfaces.FileObject
-	Name    func() string
-	Read    func(p []byte) (n int, err error)
-	Write   func(p []byte) (n int, err error)
-	Seek    func(offset int64, whence int) (int64, error)
-	Stat    func() (os.FileInfo, error)
-	closeFn func() error
-
-	wr writeState
+	obj      interfaces.FileObject
+	Name     func() string
+	Read     func(p []byte) (n int, err error)
+	Write    func(p []byte) (n int, err error)
+	Seek     func(offset int64, whence int) (int64, error)
+	Stat     func() (os.FileInfo, error)
+	closeFn  func() error
+	wr       writeState
 	sync.Mutex
-
 	readOnly bool
 }
+
 type writeState struct {
 	dataBuffer     []byte
 	sectorNumber   int64
@@ -58,86 +57,91 @@ type dirHandle struct {
 	sync.Mutex
 }
 
-func (d *dirHandle) Close() error { return nil }
+func (d *dirHandle) Close() error {
+	return nil
+}
 
 func (s *Backend) allocHandle(h handle) int32 {
 	s.Lock()
 	defer s.Unlock()
-	oldestHandle, oldestHandleTimestamp := 0, time.Now()
+
+	// Try to find a free handle first
 	for i, handle := range s.handles {
-		// Try to find the first free handle
 		if handle == nil {
 			s.handles[i] = h
 			s.lastUsed[i] = time.Now()
-
-			// Handle 0 is reserved for block device, so our external handles start with 1
-			return int32(i + 1)
-		}
-		// Determine the oldest handle
-		if s.lastUsed[i].Before(oldestHandleTimestamp) {
-			oldestHandle = i
-			oldestHandleTimestamp = s.lastUsed[i]
+			return int32(i + 1) // Handle 0 is reserved for block device
 		}
 	}
 
-	if time.Since(oldestHandleTimestamp) >= handleMaxLastUsed {
-		// If the oldest handle hasn't been used for at least handleMaxLastUsed,
-		// close and reallocate its index to the new handle
-		log.Printf("fs: no free handles left, evicting handle %d", oldestHandle+1)
-		s.handles[oldestHandle].Close()
-		s.handles[oldestHandle] = h
-		s.lastUsed[oldestHandle] = time.Now()
-		return int32(oldestHandle + 1)
-	}
-	log.Println("fs: no free handles left")
+	// Если свободных нет — возвращаем ошибку EMFILE.
+	// Вытеснение (eviction) ОТКЛЮЧЕНО, чтобы не убивать дескрипторы, используемые PS2.
+	log.Printf("fs: no free handles left")
 	return -udpfs.EMFILE
 }
 
 func (s *Backend) freeHandle(handle int32) bool {
 	if handle == udpfs.BlockDeviceHandle {
-		// Block device is opened for server lifetime
 		return true
 	}
+
 	s.Lock()
 	defer s.Unlock()
 
-	// Handle 0 is reserved for block device, so our external handles start with 1
-	handle = handle - 1
+	// Handle 0 is reserved for block device, external handles start with 1
+	idx := int(handle - 1)
 
-	if h := s.handles[handle]; h != nil {
+	// Проверяем, что индекс валидный
+	if idx < 0 || idx >= len(s.handles) {
+		log.Printf("fs: invalid handle %d for close", handle)
+		return false
+	}
+
+	if h := s.handles[idx]; h != nil {
 		h.Close()
-		s.handles[handle] = nil
+		s.handles[idx] = nil
 		return true
 	}
-	return true
+
+	// Handle уже был закрыт
+	log.Printf("fs: attempt to close already closed handle %d", handle)
+	return false
 }
 
 func (s *Backend) getFile(handle int32) *fileHandle {
 	if handle < 0 {
 		return nil
 	}
-
 	if handle == udpfs.BlockDeviceHandle {
 		if s.bdHandle == nil {
 			return nil
 		}
 		return s.bdHandle.fileHandle
 	}
+
 	s.Lock()
 	defer s.Unlock()
 
-	// Handle 0 is reserved for block device, so our external handles start with 1
-	handle = handle - 1
+	// Handle 0 is reserved for block device, external handles start with 1
+	idx := int(handle - 1)
 
-	h := s.handles[handle]
+	// Проверяем, что индекс валидный
+	if idx < 0 || idx >= len(s.handles) {
+		log.Printf("fs: invalid handle %d for getFile", handle)
+		return nil
+	}
+
+	h := s.handles[idx]
 	if h == nil {
 		return nil
 	}
+
 	fh, ok := h.(*fileHandle)
 	if !ok {
 		return nil
 	}
-	s.lastUsed[handle] = time.Now()
+
+	s.lastUsed[idx] = time.Now()
 	return fh
 }
 
@@ -173,18 +177,26 @@ func (s *Backend) getDir(handle int32) *dirHandle {
 	s.Lock()
 	defer s.Unlock()
 
-	// Handle 0 is reserved for block device, so our external handles start with 1
-	handle = handle - 1
+	// Handle 0 is reserved for block device, external handles start with 1
+	idx := int(handle - 1)
 
-	h := s.handles[handle]
+	// Проверяем, что индекс валидный
+	if idx < 0 || idx >= len(s.handles) {
+		log.Printf("fs: invalid handle %d for getDir", handle)
+		return nil
+	}
+
+	h := s.handles[idx]
 	if h == nil {
 		return nil
 	}
+
 	dh, ok := h.(*dirHandle)
 	if !ok {
 		return nil
 	}
-	s.lastUsed[handle] = time.Now()
+
+	s.lastUsed[idx] = time.Now()
 	return dh
 }
 
