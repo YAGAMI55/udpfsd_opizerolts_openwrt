@@ -44,8 +44,22 @@ jobs:
           make defconfig
           make package/udpfsd/compile V=s
 
+      - name: Find and list IPK files
+        id: find
+        run: |
+          echo "Searching for IPK files in sdk/bin/packages..."
+          find sdk/bin/packages -type f -name "*.ipk" -ls
+          IPK_PATH=$(find sdk/bin/packages -type f -name "*.ipk" | head -n 1)
+          if [ -z "$IPK_PATH" ]; then
+            echo "No IPK found. Listing contents of sdk/bin/packages:"
+            ls -laR sdk/bin/packages || true
+            exit 1
+          fi
+          echo "IPK found: $IPK_PATH"
+          echo "IPK_PATH=$IPK_PATH" >> $GITHUB_OUTPUT
+
       - name: Upload IPK artifact
         uses: actions/upload-artifact@v4
         with:
           name: udpfsd-ipk
-          path: sdk/bin/packages/*/udpfsd/*.ipk
+          path: ${{ steps.find.outputs.IPK_PATH }}
