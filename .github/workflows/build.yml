@@ -1,0 +1,50 @@
+name: Build UDPFSD IPK
+
+on:
+  workflow_dispatch:   # ручной запуск
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Build binary for ARMv7 (static)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o udpfsd .
+
+      - name: Prepare package structure for SDK
+        run: |
+          mkdir -p package/udpfsd/src
+          cp udpfsd package/udpfsd/src/
+
+      - name: Download OpenWrt SDK (sunxi/cortexa7)
+        run: |
+          SDK_URL="https://downloads.openwrt.org/releases/23.05.5/targets/sunxi/cortexa7/openwrt-sdk-23.05.5-sunxi-cortexa7_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+          wget -q "$SDK_URL" -O sdk.tar.xz
+          tar -xf sdk.tar.xz
+          mv openwrt-sdk-* sdk
+
+      - name: Copy package into SDK
+        run: |
+          cp -r package/udpfsd sdk/package/
+
+      - name: Build IPK via SDK
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make package/udpfsd/compile V=s
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: udpfsd-ipk
+          path: sdk/bin/packages/*/udpfsd/*.ipk
