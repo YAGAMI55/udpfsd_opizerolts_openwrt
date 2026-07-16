@@ -12,7 +12,7 @@ define Package/$(PKG_NAME)
   SECTION:=net
   CATEGORY:=Network
   TITLE:=UDPFS/UDPBD server for PlayStation 2 (Go)
-  URL:=https://github.com/YAGAMI55/udpfsd
+  URL:=https://github.com/YAGAMI55/udpfsd_opizerolts_openwrt
   DEPENDS:=   # пусто – бинарник статический
 endef
 
