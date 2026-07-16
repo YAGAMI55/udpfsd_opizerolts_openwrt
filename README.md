@@ -74,8 +74,7 @@ udpfs_ip: 192.168.1.1   # IP вашей PlayStation 2
 3. Запустите Neutrino + NHDDL:
    - Скачайте Neutrino и NHDDL.
    - Поместите .elf файлы на карту памяти PS2.
-   - В конфиге NHDDL (nhddl.yaml) укажите:
-     yaml  
+   - В конфиге NHDDL (nhddl.yaml) укажите:  
      mode: udpfs  
      udpfs_ip: 192.168.1.1   # IP вашей PS2  
      
