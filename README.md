@@ -60,7 +60,7 @@ bash
 ## yaml  
 # nhddl.yaml  
 mode: udpfs  
-udpfs_ip: 192.168.1.1   # IP вашей PlayStation 2  
+udpfs_ip: 192.168.1.10   # IP вашей PlayStation 2  
 
 
 ---
@@ -76,7 +76,7 @@ udpfs_ip: 192.168.1.1   # IP вашей PlayStation 2
    - Поместите .elf файлы на карту памяти PS2.
    - В конфиге NHDDL (nhddl.yaml) укажите:  
      mode: udpfs  
-     udpfs_ip: 192.168.1.1   # IP вашей PS2  
+     udpfs_ip: 192.168.1.10   # IP вашей PS2  
      
    - Запустите nhddl.elf – игры отобразятся в списке.
 
