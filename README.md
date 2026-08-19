@@ -3,6 +3,11 @@
 https://img.shields.io/github/v/release/YAGAMI55/udpfsd_opizerolts_openwrt
 https://github.com/YAGAMI55/udpfsd_opizerolts_openwrt/actions/workflows/build.yml/badge.svg
 
+
+[![Release](https://img.shields.io/github/v/release/YAGAMI55/udpfsd_opizerolts_openwrt)](/releses)
+[![Build](https://github.com/YAGAMI55/udpfsd_opizerolts_openwrt/actions/workflows/build.yml/badge.svg)](/build)
+
+
 Готовый IPK-пакет сервера UDPFS для Orange Pi Zero (ARMv7) под OpenWrt.
 Позволяет запускать игры с PlayStation 2 по локальной сети через протокол UDPFS.
 
