@@ -16,7 +16,7 @@
 - ✅ Автоматический запуск при загрузке (init-скрипт)
 - ✅ Сборка через GitHub Actions (не нужно ставить SDK локально)
 - ✅ Поддержка сжатых образов (ZSO, CSO)
-- ✅ Работает с Neutrino + NHDDL и OPL
+- ✅ Работает с Neutrino + NHDDL
 - ✅ Настроен под Orange Pi Zero (ARMv7 Cortex-A7)
 
 ---
